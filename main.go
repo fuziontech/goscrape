@@ -133,7 +133,7 @@ func scrapeTask(db *gorm.DB) {
 func main() {
 	db, err := gorm.Open("sqlite3", "test.db")
 	if err != nil {
-		panic("failed to connect database")
+		log.Panic("failed to connect database", err)
 	}
 	defer db.Close()
 	migrate(db)
@@ -146,6 +146,10 @@ func main() {
 		var vehicles []Vehicle
 		db.Where("equipped = ? AND code = ?", true, "1Y1").Find(&vehicles)
 		c.HTML(http.StatusOK, "index.html", gin.H{"vehicles": vehicles})
+	})
+	r.GET("/scrape", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "started"})
+		scrapeTask(db)
 	})
 	r.Run(":8080")
 }
