@@ -2,13 +2,18 @@ package main
 
 import (
 	"fmt"
+	"github.com/gin-gonic/gin"
+	"github.com/jasonlvhit/gocron"
 	"github.com/jinzhu/gorm"
 	_ "github.com/jinzhu/gorm/dialects/sqlite"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 )
 
 func panicOnError(err error) {
@@ -40,11 +45,11 @@ func migrate(db *gorm.DB) {
 	db.AutoMigrate(&Vehicle{})
 }
 
-func getVehicle(db *gorm.DB, vin, code, url string) {
+func loadVehicleOption(db *gorm.DB, vin, code, url string) {
 	var vehicle Vehicle
 	err := db.First(&vehicle, "vin = ? AND code = ?", vin, code).Error
 	if err == nil {
-		log.Println("already exists")
+		log.Printf("vin %s already exists", vin)
 		return
 	}
 	hasDiff := checkVehicleForBuildCode(vin, code)
@@ -58,9 +63,71 @@ func scrapeForVin(url string) string {
 	panicOnError(err)
 	body, err := ioutil.ReadAll(resp.Body)
 	panicOnError(err)
-	re := regexp.MustCompile("(?P<vin>WP1AC2[0-9A-z-]{11})")
+	re := regexp.MustCompile("(?P<vin>WP1[0-9A-z-]{14})")
 	vin := re.Find(body)
 	return string(vin)
+}
+
+func scrapeForAutoTraderCars(searchUrl string) []string {
+	u, err := url.Parse(searchUrl)
+	panicOnError(err)
+	re := regexp.MustCompile("\\bhref=\"(/cars-for-sale/vehicledetails[^\"]*)")
+	resp, err := http.Get(searchUrl)
+	panicOnError(err)
+	body, err := ioutil.ReadAll(resp.Body)
+	cars := re.FindAll(body, -1)
+	var urls []string
+	for _, car := range cars {
+		link := string(car)
+		link = strings.ReplaceAll(link,"href=\"", "")
+		urls = append(urls, "https://" + u.Host + link)
+	}
+	return urls
+}
+
+func scrapeTask(db *gorm.DB) {
+	LOCKINGDIFF := "1Y1"
+
+	// numRecords=25&firstRecord=25
+	firstRecordKey := "firstRecord"
+	firstRecord := 0
+	numRecordsKey := "numRecords"
+	numRecords := 50
+
+	baseListingsUrl := "https://www.autotrader.com/cars-for-sale/Used+Cars/8+Cylinder/Porsche/Cayenne/San+Francisco+CA-94117?makeCodeList=POR&listingTypes=USED&searchRadius=0&modelCodeList=CAYENNE&zip=94117&endYear=2018&marketExtension=include&engineCodes=8CLDR&startYear=2011&isNewSearch=true&sortBy=derivedpriceDESC"
+	params := url.Values{}
+	params.Add(firstRecordKey, strconv.Itoa(firstRecord))
+	params.Add(numRecordsKey, strconv.Itoa(numRecords))
+	listingsUrl := baseListingsUrl + "&" + params.Encode()
+	urls := scrapeForAutoTraderCars(listingsUrl)
+
+	for len(urls) > 5 {
+		params := url.Values{}
+		params.Add(firstRecordKey, strconv.Itoa(firstRecord))
+		params.Add(numRecordsKey, strconv.Itoa(numRecords))
+		listingsUrl = baseListingsUrl + "&" + params.Encode()
+
+		urls = scrapeForAutoTraderCars(listingsUrl)
+		for _, url := range urls {
+			url = strings.Split(url, ";clickType")[0]
+
+			var vehicle Vehicle
+			err := db.First(&vehicle, "url = ?", url).Error
+			if err == nil {
+				log.Println(url)
+				log.Println("vehicle has been scraped before")
+				continue
+			}
+			time.Sleep(time.Second * 3)
+			log.Println(url)
+			log.Println("scraping url for vin")
+			vin := scrapeForVin(url)
+			loadVehicleOption(db, vin, LOCKINGDIFF, url)
+		}
+		firstRecord = firstRecord + 50
+		log.Printf("turning to next page and starting with vehicle %d", firstRecord)
+	}
+	log.Printf("done with vehicle %d", firstRecord)
 }
 
 func main() {
@@ -71,11 +138,14 @@ func main() {
 	defer db.Close()
 	migrate(db)
 
-	vin := "WP1AC2A23HLA97159"
-	LOCKINGDIFF := "1Y1"
-	code := LOCKINGDIFF
-	url := "https://www.autotrader.com/cars-for-sale/vehicledetails.xhtml?listingId=555252581&zip=94117&referrer=%2Fcars-for-sale%2Fsearchresults.xhtml%3Fzip%3D94117%26startYear%3D2011%26incremental%3Dall%26endYear%3D2018%26modelCodeList%3DCAYENNE%26makeCodeList%3DPOR%26listingTypes%3DUSED%26sortBy%3DderivedpriceDESC%26engineCodes%3D8CLDR%26firstRecord%3D0%26marketExtension%3Dinclude%26searchRadius%3D0%26isNewSearch%3Dfalse&listingTypes=USED&startYear=2011&numRecords=25&firstRecord=0&endYear=2018&modelCodeList=CAYENNE&makeCodeList=POR&searchRadius=0&makeCode1=POR&modelCode1=CAYENNE&clickType=listing"
-	vin = scrapeForVin(url)
-	getVehicle(db, vin, code, url)
-	fmt.Println(vin)
+	gocron.Every(6).Hours().Do(scrapeTask, db)
+
+	r := gin.Default()
+	r.LoadHTMLGlob("templates/*")
+	r.GET("/", func(c *gin.Context) {
+		var vehicles []Vehicle
+		db.Where("equipped = ? AND code = ?", true, "1Y1").Find(&vehicles)
+		c.HTML(http.StatusOK, "index.html", gin.H{"vehicles": vehicles})
+	})
+	r.Run(":8080")
 }
