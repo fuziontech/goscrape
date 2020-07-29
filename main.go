@@ -6,6 +6,7 @@ import (
 	"github.com/jasonlvhit/gocron"
 	"github.com/jinzhu/gorm"
 	_ "github.com/jinzhu/gorm/dialects/sqlite"
+	"github.com/xeonx/timeago"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -144,8 +145,9 @@ func main() {
 	r.LoadHTMLGlob("templates/*")
 	r.GET("/", func(c *gin.Context) {
 		var vehicles []Vehicle
-		db.Where("equipped = ? AND code = ?", true, "1Y1").Find(&vehicles)
-		c.HTML(http.StatusOK, "index.html", gin.H{"vehicles": vehicles})
+		db.Where("equipped = ? AND code = ?", true, "1Y1").Order("updated_at desc").Find(&vehicles)
+		lastUpdate := timeago.English.Format(vehicles[0].UpdatedAt)
+		c.HTML(http.StatusOK, "index.html", gin.H{"vehicles": vehicles, "lastUpdated": lastUpdate})
 	})
 	r.GET("/scrape", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "started"})

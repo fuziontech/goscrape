@@ -6,10 +6,11 @@
 </head>
 <body>
 <h1>Porsche Cayenne Listings</h1>
+<h2>List last updated {{.lastUpdated}}</h2>
 <ul>
     {{ range .vehicles }}
     <li>
-        <a href="{{.URL}}">{{.URL}}</a>
+        <a href="{{.URL}}">{{.Vin}}</a>
     </li>
     {{ end }}
 </ul>
