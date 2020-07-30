@@ -10,6 +10,7 @@
 <ul>
     {{ range .vehicles }}
     <li>
+        {{.Price}}
         <a href="{{.URL}}">
             <img src="{{.Image}}" width="50" height="35">{{.Title}}
         </a> - {{ .HumanUpdatedAt }}

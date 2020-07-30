@@ -38,6 +38,7 @@ func checkVehicleForBuildCode(vin string, code string) bool {
 
 type Vehicle struct {
 	gorm.Model
+	Price string
 	Vin string
 	Code string
 	Equipped bool
@@ -75,7 +76,7 @@ func loadVehicleOption(db *gorm.DB, v Vehicle, code string) {
 	return
 }
 
-func scrapeForVin(url string) (string, string, string) {
+func scrapeForVin(url string) (string, string, string, string) {
 	resp, err := http.Get(url)
 	panicOnError(err)
 	defer resp.Body.Close()
@@ -91,8 +92,9 @@ func scrapeForVin(url string) (string, string, string) {
 	re := regexp.MustCompile("(?P<vin>WP1[0-9A-z-]{14})")
 	vin := re.Find([]byte(body))
 	title := strings.Split(body, "\n")[0]
-
-	return string(vin), title, img
+	price := doc.Find(".first-price").First().Text()
+	price = "$" + strings.ReplaceAll(price, "MSRP", "")
+	return string(vin), title, img, price
 }
 
 func scrapeForAutoTraderCars(searchUrl string) []string {
@@ -150,8 +152,9 @@ func scrapeTask(db *gorm.DB) {
 			time.Sleep(time.Second * 3)
 			log.Println(url)
 			log.Println("scraping url for vin")
-			vin, title, img := scrapeForVin(url)
+			vin, title, img, price := scrapeForVin(url)
 			vehicle = Vehicle{
+				Price: price,
 				Vin: vin,
 				Title: title,
 				Image: img,
@@ -190,7 +193,7 @@ func main() {
 	})
 	r.GET("/scrape", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "started"})
-		scrapeTask(db)
+		go scrapeTask(db)
 	})
 	r.Run(":8080")
 }
