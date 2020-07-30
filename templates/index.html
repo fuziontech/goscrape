@@ -10,7 +10,9 @@
 <ul>
     {{ range .vehicles }}
     <li>
-        <a href="{{.URL}}">{{.Vin}}</a>
+        <a href="{{.URL}}">
+            <img src="{{.Image}}" width="50" height="35">{{.Title}}
+        </a> - {{ .HumanUpdatedAt }}
     </li>
     {{ end }}
 </ul>

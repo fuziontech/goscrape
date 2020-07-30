@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/PuerkitoBio/goquery"
 	"github.com/gin-gonic/gin"
 	"github.com/jasonlvhit/gocron"
 	"github.com/jinzhu/gorm"
@@ -26,6 +27,8 @@ func panicOnError(err error) {
 func checkVehicleForBuildCode(vin string, code string) bool {
 	resp, err := http.Get(fmt.Sprintf("https://vinanalytics.com/car/%s/", vin))
 	panicOnError(err)
+	defer resp.Body.Close()
+
 	body, err := ioutil.ReadAll(resp.Body)
 	panicOnError(err)
 	bodyStr := string(body)
@@ -39,6 +42,12 @@ type Vehicle struct {
 	Code string
 	Equipped bool
 	URL string
+	Image string
+	Title string
+}
+
+func (v *Vehicle) HumanUpdatedAt() string {
+	return timeago.English.Format(v.UpdatedAt)
 }
 
 func migrate(db *gorm.DB) {
@@ -46,27 +55,44 @@ func migrate(db *gorm.DB) {
 	db.AutoMigrate(&Vehicle{})
 }
 
-func loadVehicleOption(db *gorm.DB, vin, code, url string) {
+func loadVehicleOption(db *gorm.DB, v Vehicle, code string) {
 	var vehicle Vehicle
-	err := db.First(&vehicle, "vin = ? AND code = ?", vin, code).Error
+	err := db.First(&vehicle, "vin = ? AND code = ?", v.Vin, code).Error
 	if err == nil {
-		log.Printf("vin %s already exists", vin)
+		log.Printf("vin %s already exists", v.Vin)
 		return
 	}
-	hasDiff := checkVehicleForBuildCode(vin, code)
-	vehicle = Vehicle{Vin: vin, Code: code, Equipped: hasDiff, URL: url}
+	hasDiff := checkVehicleForBuildCode(v.Vin, code)
+	vehicle = Vehicle{
+		Vin: v.Vin,
+		Code: code,
+		Equipped: hasDiff,
+		URL: v.URL,
+		Title: v.Title,
+		Image: v.Image,
+	}
 	db.Save(&vehicle)
 	return
 }
 
-func scrapeForVin(url string) string {
+func scrapeForVin(url string) (string, string, string) {
 	resp, err := http.Get(url)
 	panicOnError(err)
-	body, err := ioutil.ReadAll(resp.Body)
+	defer resp.Body.Close()
+
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	panicOnError(err)
+
+	//TODO: add image
+	img := ""
+
+	body := doc.Text()
+
 	re := regexp.MustCompile("(?P<vin>WP1[0-9A-z-]{14})")
-	vin := re.Find(body)
-	return string(vin)
+	vin := re.Find([]byte(body))
+	title := strings.Split(body, "\n")[0]
+
+	return string(vin), title, img
 }
 
 func scrapeForAutoTraderCars(searchUrl string) []string {
@@ -75,6 +101,8 @@ func scrapeForAutoTraderCars(searchUrl string) []string {
 	re := regexp.MustCompile("\\bhref=\"(/cars-for-sale/vehicledetails[^\"]*)")
 	resp, err := http.Get(searchUrl)
 	panicOnError(err)
+	defer resp.Body.Close()
+
 	body, err := ioutil.ReadAll(resp.Body)
 	cars := re.FindAll(body, -1)
 	var urls []string
@@ -122,8 +150,14 @@ func scrapeTask(db *gorm.DB) {
 			time.Sleep(time.Second * 3)
 			log.Println(url)
 			log.Println("scraping url for vin")
-			vin := scrapeForVin(url)
-			loadVehicleOption(db, vin, LOCKINGDIFF, url)
+			vin, title, img := scrapeForVin(url)
+			vehicle = Vehicle{
+				Vin: vin,
+				Title: title,
+				Image: img,
+				URL: url,
+			}
+			loadVehicleOption(db, vehicle, LOCKINGDIFF)
 		}
 		firstRecord = firstRecord + 50
 		log.Printf("turning to next page and starting with vehicle %d", firstRecord)
@@ -146,7 +180,12 @@ func main() {
 	r.GET("/", func(c *gin.Context) {
 		var vehicles []Vehicle
 		db.Where("equipped = ? AND code = ?", true, "1Y1").Order("updated_at desc").Find(&vehicles)
-		lastUpdate := timeago.English.Format(vehicles[0].UpdatedAt)
+		var lastUpdate string
+		if len(vehicles) > 0 {
+			lastUpdate = timeago.English.Format(vehicles[0].UpdatedAt)
+		} else {
+			lastUpdate = "never"
+		}
 		c.HTML(http.StatusOK, "index.html", gin.H{"vehicles": vehicles, "lastUpdated": lastUpdate})
 	})
 	r.GET("/scrape", func(c *gin.Context) {
