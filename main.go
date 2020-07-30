@@ -65,6 +65,7 @@ func loadVehicleOption(db *gorm.DB, v Vehicle, code string) {
 	}
 	hasDiff := checkVehicleForBuildCode(v.Vin, code)
 	vehicle = Vehicle{
+		Price: v.Price,
 		Vin: v.Vin,
 		Code: code,
 		Equipped: hasDiff,
